@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 from models import Satellite
 
 
-
 def save_satellites(
     db: Session,
     satellite_data: list
@@ -106,3 +105,113 @@ def save_satellites(
         "updated": updated,
         "total": inserted + updated
     }
+
+
+# ---------------------------------------------------------
+# GET ALL SATELLITES
+# ---------------------------------------------------------
+
+def get_all_satellites(
+    db: Session
+):
+
+    return (
+        db.query(Satellite)
+        .order_by(Satellite.id)
+        .all()
+    )
+
+
+# ---------------------------------------------------------
+# GET ONE SATELLITE
+# ---------------------------------------------------------
+
+def get_satellite(
+    db: Session,
+    satellite_id: int
+):
+
+    return (
+        db.query(Satellite)
+        .filter(
+            Satellite.id == satellite_id
+        )
+        .first()
+    )
+
+
+# ---------------------------------------------------------
+# UPDATE SATELLITE
+# ---------------------------------------------------------
+
+def update_satellite(
+    db: Session,
+    satellite_id: int,
+    name: str | None = None,
+    is_active: bool | None = None
+):
+
+    satellite = get_satellite(
+        db,
+        satellite_id
+    )
+
+    if satellite is None:
+        return None
+
+    if name is not None:
+        satellite.name = name
+
+    if is_active is not None:
+        satellite.is_active = is_active
+
+    satellite.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(satellite)
+
+    return satellite
+
+
+# ---------------------------------------------------------
+# DELETE SATELLITE
+# ---------------------------------------------------------
+
+def delete_satellite(
+    db: Session,
+    satellite_id: int
+):
+
+    satellite = get_satellite(
+        db,
+        satellite_id
+    )
+
+    if satellite is None:
+        return None
+
+    db.delete(satellite)
+    db.commit()
+
+    return satellite
+
+def delete_multiple_satellites(
+    db: Session,
+    satellite_ids: list[int]
+):
+
+    satellites = (
+        db.query(Satellite)
+        .filter(Satellite.id.in_(satellite_ids))
+        .all()
+    )
+
+    if not satellites:
+        return []
+
+    for satellite in satellites:
+        db.delete(satellite)
+
+    db.commit()
+
+    return [satellite.id for satellite in satellites]

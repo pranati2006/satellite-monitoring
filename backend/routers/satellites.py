@@ -2,20 +2,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import AnalysisSatellite, Conjunction, Satellite
-
-from services.satellite_service import save_satellites
-from services.space_trak import fetch_satellites
-from services.sgp4_service import calculate_position
-from services.collision_service import screen_satellites
-from services.collision_service import detailed_analysis
-
-from datetime import datetime, timezone, timedelta
-from config import (
-    SCREENING_EPS_KM,
-    SCREENING_INTERVAL_MINUTES,
-    PREDICTION_DAYS
+from services.satellite_service import (
+    save_satellites,
+    get_all_satellites,
+    get_satellite,
+    update_satellite,
+    delete_satellite,
+    delete_multiple_satellites
 )
+from services.space_trak import fetch_satellites
+
 
 router = APIRouter(
     prefix="/satellites",
@@ -23,200 +19,142 @@ router = APIRouter(
 )
 
 
+# ---------------------------------------------------------
+# GET ALL SATELLITES
+# ---------------------------------------------------------
+
 @router.get("/")
 def get_satellites(
     db: Session = Depends(get_db)
 ):
 
-    satellites = db.query(Satellite).all()
+    return get_all_satellites(db)
 
-    return satellites
+
+# ---------------------------------------------------------
+# GET ONE SATELLITE
+# ---------------------------------------------------------
+
+@router.get("/{satellite_id}")
+def get_one_satellite(
+    satellite_id: int,
+    db: Session = Depends(get_db)
+):
+
+    satellite = get_satellite(
+        db,
+        satellite_id
+    )
+
+    if satellite is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Satellite not found"
+        )
+
+    return satellite
+
+
+# ---------------------------------------------------------
+# FETCH SATELLITES FROM SPACE-TRACK
+# ---------------------------------------------------------
 
 @router.post("/fetch")
 def fetch_and_save_satellites(
-    db: Session = Depends(get_db),
-    limit: int = 10
-):
-
-    satellite_data = fetch_satellites(limit=limit)
-
-    save_satellites(db, satellite_data)
-
-    return {
-        "message": f"Fetched and saved {len(satellite_data)} satellites."
-    }
-
-@router.post("/collision/run")
-def run_collision_analysis(
+    limit: int = 10,
     db: Session = Depends(get_db)
 ):
 
-    satellites = db.query(Satellite).filter(
-        Satellite.is_active == True
-    ).all()
-
-    if not satellites:
-        raise HTTPException(
-            status_code=404,
-            detail="No active satellites found"
-        )
-
-    analysis_start = datetime.now(timezone.utc)
-
-    analysis_end = max(
-        satellite.epoch.replace(tzinfo=timezone.utc)
-        + timedelta(days=PREDICTION_DAYS)
-        for satellite in satellites
+    satellite_data = fetch_satellites(
+        limit=limit
     )
 
-    # Create analysis run
-    analysis = AnalysisRun(
-        started_at=analysis_start,
-        prediction_start=analysis_start,
-        prediction_end=analysis_end,
-        screening_interval_seconds=SCREENING_INTERVAL_MINUTES * 60,
-        total_satellites=len(satellites),
-        status="RUNNING"
+    result = save_satellites(
+        db,
+        satellite_data
     )
-
-    db.add(analysis)
-    db.commit()
-    db.refresh(analysis)
-
-    # Prepare data for screening service
-    satellite_data = []
-
-    for satellite in satellites:
-
-        satellite_data.append({
-            "id": satellite.id,
-            "norad_id": satellite.norad_id,
-            "tle_line1": satellite.tle_line1,
-            "tle_line2": satellite.tle_line2,
-            "tle_epoch": satellite.epoch.replace(
-                tzinfo=timezone.utc
-            )
-        })
-
-        # Store satellites included in this analysis
-        analysis_satellite = AnalysisSatellite(
-            analysis_id=analysis.id,
-            satellite_id=satellite.id,
-            included=True
-        )
-
-        db.add(analysis_satellite)
-
-    db.commit()
-
-    # Call existing screening service
-    results = screen_satellites(
-        satellite_data,
-        analysis_start,
-        analysis_end,
-        eps_km=SCREENING_EPS_KM
-    )
-
-    # Store conjunction candidates
-    for result in results:
-
-        conjunction = Conjunction(
-            analysis_id=analysis.id,
-            satellite_1_id=result["satellite_1_id"],
-            satellite_2_id=result["satellite_2_id"],
-            coarse_tca=result["time"],
-            minimum_coarse_distance_km=result["distance_km"],
-            conjunction_threshold_km=SCREENING_EPS_KM,
-            selected_for_detailed=True,
-            status="POSSIBLE"
-        )
-
-        db.add(conjunction) 
-
-    analysis.conjunction_count = len(results)
-    analysis.completed_at = datetime.now(timezone.utc)
-    analysis.status = "COMPLETED"
-
-    db.commit()
 
     return {
-        "analysis_id": analysis.id,
-        "status": analysis.status,
-        "total_satellites": len(satellites),
-        "conjunction_count": len(results),
-        "analysis_start": analysis_start,
-        "analysis_end": analysis_end
+        "message": "Satellites fetched successfully",
+        "fetched": len(satellite_data),
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "total": result["total"]
     }
 
-@router.post("/collision/detailed/run")
-def run_detailed_collision_analysis(
-    conjunction_id: int,
+
+# ---------------------------------------------------------
+# UPDATE SATELLITE
+# ---------------------------------------------------------
+
+@router.put("/{satellite_id}")
+def edit_satellite(
+    satellite_id: int,
+    name: str | None = None,
+    is_active: bool | None = None,
     db: Session = Depends(get_db)
 ):
 
-    conjunction = db.query(Conjunction).filter(
-        Conjunction.id == conjunction_id
-    ).first()
-
-    if not conjunction:
-        raise HTTPException(
-            status_code=404,
-            detail="Conjunction not found"
-        )
-
-    satellite_1 = db.query(Satellite).filter(
-        Satellite.norad_id == conjunction.satellite_1_id
-    ).first()
-
-    satellite_2 = db.query(Satellite).filter(
-        Satellite.norad_id == conjunction.satellite_2_id
-    ).first()
-
-    if not satellite_1 or not satellite_2:
-        raise HTTPException(
-            status_code=404,
-            detail="One or both satellites not found"
-        )
-
-    # Call existing detailed-analysis service
-    result = detailed_analysis(
-        satellite_1,
-        satellite_2,
-        conjunction.coarse_tca
+    satellite = update_satellite(
+        db,
+        satellite_id,
+        name,
+        is_active
     )
 
-    # Store detailed result
-    detailed = DetailedConjunction(
-        conjunction_id=conjunction.id,
-
-        analysis_start=conjunction.coarse_tca - timedelta(
-            minutes=SCREENING_INTERVAL_MINUTES
-        ),
-
-        analysis_end=conjunction.coarse_tca + timedelta(
-            minutes=SCREENING_INTERVAL_MINUTES
-        ),
-
-        tca=result["tca"],
-
-        minimum_distance_km=result["minimum_distance_km"],
-
-        calculated_at=datetime.now(timezone.utc)
-    )
-
-    db.add(detailed)
-
-    conjunction.selected_for_detailed = True
-    conjunction.status = "ANALYZED"
-
-    db.commit()
-    db.refresh(detailed)
+    if satellite is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Satellite not found"
+        )
 
     return {
-        "conjunction_id": conjunction.id,
-        "satellite_1": conjunction.satellite_1_id,
-        "satellite_2": conjunction.satellite_2_id,
-        "tca": result["tca"],
-        "minimum_distance_km": result["minimum_distance_km"],
-        "status": conjunction.status
+        "message": "Satellite updated successfully",
+        "satellite": satellite
+    }
+
+
+# ---------------------------------------------------------
+# DELETE SATELLITE
+# ---------------------------------------------------------
+
+
+
+@router.delete("/bulk")
+def remove_multiple_satellites(
+    satellite_ids: list[int],
+    db: Session = Depends(get_db)
+):
+
+    deleted_ids = delete_multiple_satellites(
+        db,
+        satellite_ids
+    )
+
+    return {
+        "message": "Satellites deleted successfully",
+        "deleted_satellite_ids": deleted_ids,
+        "count": len(deleted_ids)
+    }
+
+@router.delete("/{satellite_id}")
+def remove_satellite(
+    satellite_id: int,
+    db: Session = Depends(get_db)
+):
+
+    satellite = delete_satellite(
+        db,
+        satellite_id
+    )
+
+    if satellite is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Satellite not found"
+        )
+
+    return {
+        "message": "Satellite deleted successfully",
+        "satellite_id": satellite_id
     }
