@@ -135,10 +135,11 @@ def run_detailed_collision_analysis(
     conjunction_id: int,
     db: Session = Depends(get_db)
 ):
-
-    conjunction = db.query(Conjunction).filter(
-        Conjunction.id == conjunction_id
-    ).first()
+    conjunction = (
+        db.query(Conjunction)
+        .filter(Conjunction.id == conjunction_id)
+        .first()
+    )
 
     if not conjunction:
         raise HTTPException(
@@ -146,9 +147,45 @@ def run_detailed_collision_analysis(
             detail="Conjunction not found"
         )
 
-    satellite_1 = db.query(Satellite).filter( Satellite.id == conjunction.satellite_1_id).first()
+    # -----------------------------------------------------
+    # CHECK IF DETAILED ANALYSIS ALREADY EXISTS
+    # -----------------------------------------------------
 
-    satellite_2 = db.query(Satellite).filter( Satellite.id == conjunction.satellite_2_id).first()
+    existing = (
+        db.query(DetailedConjunction)
+        .filter(
+            DetailedConjunction.conjunction_id == conjunction_id
+        )
+        .first()
+    )
+
+    if existing:
+        return {
+            "conjunction_id": conjunction.id,
+            "satellite_1": conjunction.satellite_1_id,
+            "satellite_2": conjunction.satellite_2_id,
+            "tca": existing.tca,
+            "minimum_distance_km": existing.minimum_distance_km,
+            "relative_velocity_km_s": existing.relative_velocity_km_s,
+            "risk_level": existing.risk_level,
+            "status": "ALREADY_ANALYZED"
+        }
+
+    # -----------------------------------------------------
+    # GET SATELLITES
+    # -----------------------------------------------------
+
+    satellite_1 = (
+        db.query(Satellite)
+        .filter(Satellite.id == conjunction.satellite_1_id)
+        .first()
+    )
+
+    satellite_2 = (
+        db.query(Satellite)
+        .filter(Satellite.id == conjunction.satellite_2_id)
+        .first()
+    )
 
     if not satellite_1 or not satellite_2:
         raise HTTPException(
@@ -156,28 +193,37 @@ def run_detailed_collision_analysis(
             detail="One or both satellites not found"
         )
 
-    # Call existing detailed-analysis service
+    # -----------------------------------------------------
+    # RUN DETAILED ANALYSIS
+    # -----------------------------------------------------
+
     result = detailed_analysis(
         satellite_1,
         satellite_2,
         conjunction.coarse_tca
     )
 
-    # Store detailed result
+    # -----------------------------------------------------
+    # SAVE RESULT
+    # -----------------------------------------------------
+
     detailed = DetailedConjunction(
         conjunction_id=conjunction.id,
 
-        analysis_start=conjunction.coarse_tca - timedelta(
-            minutes=SCREENING_INTERVAL_MINUTES
+        analysis_start=(
+            conjunction.coarse_tca
+            - timedelta(minutes=SCREENING_INTERVAL_MINUTES)
         ),
 
-        analysis_end=conjunction.coarse_tca + timedelta(
-            minutes=SCREENING_INTERVAL_MINUTES
+        analysis_end=(
+            conjunction.coarse_tca
+            + timedelta(minutes=SCREENING_INTERVAL_MINUTES)
         ),
 
         tca=result["tca"],
 
-        minimum_distance_km=result["minimum_distance_km"],
+        minimum_distance_km=
+            result["minimum_distance_km"],
 
         calculated_at=datetime.now(timezone.utc)
     )
@@ -194,11 +240,12 @@ def run_detailed_collision_analysis(
         "conjunction_id": conjunction.id,
         "satellite_1": conjunction.satellite_1_id,
         "satellite_2": conjunction.satellite_2_id,
-        "tca": result["tca"],
-        "minimum_distance_km": result["minimum_distance_km"],
+        "tca": detailed.tca,
+        "minimum_distance_km": detailed.minimum_distance_km,
+        "relative_velocity_km_s": detailed.relative_velocity_km_s,
+        "risk_level": detailed.risk_level,
         "status": conjunction.status
     }
-
 @router.post("/collision/detailed/run-batch")
 def run_batch_detailed_collision_analysis(
     conjunction_ids: list[int],

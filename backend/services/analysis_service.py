@@ -313,3 +313,27 @@ def get_complete_analysis(
         "detailed_conjunctions":
             detailed_conjunctions
     }
+
+
+# ---------------------------------------------------------
+# DELETE ANALYSIS
+# ---------------------------------------------------------
+
+def delete_analysis(
+    db: Session,
+    analysis_id: int
+):
+
+    analysis = (
+        db.query(AnalysisRun)
+        .filter(AnalysisRun.id == analysis_id)
+        .first()
+    )
+
+    if analysis is None:
+        return None
+
+    db.delete(analysis)
+    db.commit()
+
+    return analysis_id

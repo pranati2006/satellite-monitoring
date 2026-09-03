@@ -15,7 +15,8 @@ from services.analysis_service import (
     update_satellite_selection,
     update_multiple_satellite_selection,
     get_analysis_conjunctions,
-    get_analysis_detailed_conjunctions
+    get_analysis_detailed_conjunctions,
+    delete_analysis
 )
 
 
@@ -168,3 +169,29 @@ def get_detailed_conjunctions(
         db,
         analysis_id
     )
+
+# ---------------------------------------------------------
+# DELETE ANALYSIS
+# ---------------------------------------------------------
+
+@router.delete("/{analysis_id}")
+def remove_analysis(
+    analysis_id: int,
+    db: Session = Depends(get_db)
+):
+
+    result = delete_analysis(
+        db,
+        analysis_id
+    )
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Analysis not found"
+        )
+
+    return {
+        "message": "Analysis deleted successfully",
+        "analysis_id": result
+    }

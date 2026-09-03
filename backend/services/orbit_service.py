@@ -1,147 +1,169 @@
-from datetime import datetime, timedelta, timezone
-import math
+from datetime import datetime, timezone
 
-from models import Satellite
-from services.sgp4_service import calculate_position
+from sgp4.api import Satrec, jday
 
 
 # ---------------------------------------------------------
-# CALCULATE ORBIT PERIOD
+# CALCULATE SATELLITE POSITION
 # ---------------------------------------------------------
 
-def calculate_orbit_period(mean_motion):
-    """
-    mean_motion = revolutions per day
-
-    Returns orbital period in seconds.
-    """
-
-    if not mean_motion or mean_motion <= 0:
-        return None
-
-    return 86400 / mean_motion
-
-
-# ---------------------------------------------------------
-# GET CURRENT POSITION
-# ---------------------------------------------------------
-
-def get_current_position(
-    satellite: Satellite
+def calculate_satellite_position(
+    satellite,
+    target_time: datetime
 ):
+    """
+    Calculate satellite position using SGP4.
 
-    current_time = datetime.now(timezone.utc)
+    Returns TEME position in km.
+    """
 
-    result = calculate_position(
+    sat = Satrec.twoline2rv(
         satellite.tle_line1,
-        satellite.tle_line2,
-        current_time.year,
-        current_time.month,
-        current_time.day,
-        current_time.hour,
-        current_time.minute,
-        current_time.second
+        satellite.tle_line2
     )
 
-    return {
-        "timestamp": current_time,
-        "position": result["position_km"],
-        "velocity": result["velocity_km_s"]
-    }
-
-
-# ---------------------------------------------------------
-# GENERATE ORBIT PATH
-# ---------------------------------------------------------
-
-def generate_orbit_path(
-    satellite: Satellite,
-    start_time: datetime | None = None,
-    samples: int = 120
-):
-
-    if start_time is None:
-        start_time = datetime.now(timezone.utc)
-
-    if start_time.tzinfo is None:
-        start_time = start_time.replace(
-            tzinfo=timezone.utc
-        )
-
-    period_seconds = calculate_orbit_period(
-        satellite.mean_motion
+    jd, fr = jday(
+        target_time.year,
+        target_time.month,
+        target_time.day,
+        target_time.hour,
+        target_time.minute,
+        target_time.second
     )
 
-    if period_seconds is None:
+    error_code, position, velocity = sat.sgp4(jd, fr)
+
+    if error_code != 0:
         raise ValueError(
-            "Invalid satellite mean motion"
+            f"SGP4 calculation failed with error code {error_code}"
         )
-
-    interval_seconds = period_seconds / samples
-
-    positions = []
-
-    for i in range(samples):
-
-        current_time = (
-            start_time
-            + timedelta(
-                seconds=i * interval_seconds
-            )
-        )
-
-        result = calculate_position(
-            satellite.tle_line1,
-            satellite.tle_line2,
-            current_time.year,
-            current_time.month,
-            current_time.day,
-            current_time.hour,
-            current_time.minute,
-            current_time.second
-        )
-
-        positions.append({
-            "timestamp": current_time,
-            "position": result["position_km"]
-        })
 
     return {
-        "orbit_period_seconds": period_seconds,
-        "positions": positions
+        "x": position[0],
+        "y": position[1],
+        "z": position[2],
+        "vx": velocity[0],
+        "vy": velocity[1],
+        "vz": velocity[2]
     }
 
 
 # ---------------------------------------------------------
-# GET ORBIT DATA FOR ONE SATELLITE
+# JULIAN DATE
 # ---------------------------------------------------------
 
-def get_orbit_data(
-    db,
-    satellite_id: int,
-    start_time: datetime | None = None,
-    samples: int = 120
+def calculate_julian_date(target_time: datetime):
+
+    jd, fr = jday(
+        target_time.year,
+        target_time.month,
+        target_time.day,
+        target_time.hour,
+        target_time.minute,
+        target_time.second
+    )
+
+    return jd + fr
+
+
+# ---------------------------------------------------------
+# GMST
+# ---------------------------------------------------------
+
+def calculate_gmst(julian_date):
+    """
+    Calculate Greenwich Mean Sidereal Time in radians.
+    """
+
+    t = (
+        julian_date - 2451545.0
+    ) / 36525.0
+
+    gmst_degrees = (
+        280.46061837
+        + 360.98564736629
+        * (julian_date - 2451545.0)
+        + 0.000387933 * t * t
+        - (t * t * t) / 38710000.0
+    )
+
+    gmst_degrees %= 360.0
+
+    return gmst_degrees * 3.141592653589793 / 180.0
+
+
+# ---------------------------------------------------------
+# TEME → EARTH FIXED
+# ---------------------------------------------------------
+
+def teme_to_ecef(
+    x,
+    y,
+    z,
+    target_time
+):
+    """
+    Convert TEME coordinates to an approximate
+    Earth-fixed coordinate system.
+
+    Input:
+        km
+
+    Output:
+        km
+    """
+
+    julian_date = calculate_julian_date(
+        target_time
+    )
+
+    theta = calculate_gmst(
+        julian_date
+    )
+
+    import math
+
+    cos_theta = math.cos(theta)
+    sin_theta = math.sin(theta)
+
+    x_ecef = (
+        cos_theta * x
+        + sin_theta * y
+    )
+
+    y_ecef = (
+        -sin_theta * x
+        + cos_theta * y
+    )
+
+    z_ecef = z
+
+    return {
+        "x": x_ecef,
+        "y": y_ecef,
+        "z": z_ecef
+    }
+
+
+# ---------------------------------------------------------
+# GET SATELLITE POSITION FOR CESIUM
+# ---------------------------------------------------------
+
+def get_satellite_position(
+    satellite,
+    target_time
 ):
 
-    satellite = (
-        db.query(Satellite)
-        .filter(
-            Satellite.id == satellite_id
-        )
-        .first()
-    )
-
-    if satellite is None:
-        return None
-
-    current_position = get_current_position(
-        satellite
-    )
-
-    orbit = generate_orbit_path(
+    position = calculate_satellite_position(
         satellite,
-        start_time=start_time,
-        samples=samples
+        target_time
+    )
+
+    ecef = teme_to_ecef(
+        position["x"],
+        position["y"],
+        position["z"],
+        target_time
     )
 
     return {
@@ -149,11 +171,22 @@ def get_orbit_data(
         "norad_id": satellite.norad_id,
         "name": satellite.name,
 
-        "current_position": current_position,
+        "position": {
+            "x": ecef["x"],
+            "y": ecef["y"],
+            "z": ecef["z"]
+        },
 
-        "orbit_period_seconds":
-            orbit["orbit_period_seconds"],
+        "velocity": {
+            "x": position["vx"],
+            "y": position["vy"],
+            "z": position["vz"]
+        },
 
-        "orbit_path":
-            orbit["positions"]
+        "inclination": satellite.inclination,
+        "eccentricity": satellite.eccentricity,
+        "raan": satellite.raan,
+        "arg_perigee": satellite.arg_perigee,
+        "mean_anomaly": satellite.mean_anomaly,
+        "mean_motion": satellite.mean_motion
     }
