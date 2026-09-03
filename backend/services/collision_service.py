@@ -8,6 +8,10 @@ from config import (
     SCREENING_INTERVAL_MINUTES,
     PREDICTION_DAYS
 )
+from collections import defaultdict
+from itertools import combinations
+import math
+
 
 
 def calculate_distance(position1, position2):
@@ -66,46 +70,87 @@ def screen_satellites(
                 })
 
         # 2. DBSCAN for this timestamp
+        # if len(available_satellites) >= 2:
+
+        #     clusters = find_clusters(
+        #         available_satellites,
+        #         eps_km=eps_km,
+        #         min_samples=2
+        #     )
+
+        #     # 3. Generate pairs inside each cluster
+        #     for cluster in clusters:
+
+        #         for sat1, sat2 in combinations(cluster, 2):
+
+        #             distance = calculate_distance(
+        #                 sat1["position"],
+        #                 sat2["position"]
+        #             )
+
+        #             pair = tuple(sorted(
+        #                    [sat1, sat2],
+        #                    key=lambda x: x["id"]
+        #             )) 
+        #             pair_key = (
+        #                        pair[0]["id"],
+        #                        pair[1]["id"]
+        #             )                       
+
+        #             # 4. First occurrence
+        #             if pair_key not in closest_pairs:
+
+        #                 closest_pairs[pair_key] = {
+        #                             "satellite_1_id": pair[0]["id"],
+        #                             "satellite_2_id": pair[1]["id"],
+        #                             "satellite_1_norad_id": pair[0]["norad_id"],
+        #                             "satellite_2_norad_id": pair[1]["norad_id"],
+        #                             "time": timestamp,
+        #                             "distance_km": distance
+        #                         }
+        #             # 5. Replace if this timestamp is closer
+        #             elif distance < closest_pairs[pair_key]["distance_km"]:
+
+        #                 closest_pairs[pair_key] = {
+        #                     "satellite_1_id": pair[0]["id"],
+        #                     "satellite_2_id": pair[1]["id"],
+        #                     "satellite_1_norad_id": pair[0]["norad_id"],
+        #                     "satellite_2_norad_id": pair[1]["norad_id"],
+        #                     "time": timestamp,
+        #                     "distance_km": distance
+        #                 }
+        # 2. Hash-based spatial grid
         if len(available_satellites) >= 2:
 
-            clusters = find_clusters(
-                available_satellites,
-                eps_km=eps_km,
-                min_samples=2
-            )
+            candidate_pairs = find_grid_candidates(available_satellites,eps_km=eps_km)
 
-            # 3. Generate pairs inside each cluster
-            for cluster in clusters:
+           # Create quick lookup by satellite ID
+            satellite_lookup = {satellite["id"]: satellite for satellite in available_satellites}
 
-                for sat1, sat2 in combinations(cluster, 2):
+           # 3. Check exact distance only for candidates
+            for id1, id2 in candidate_pairs:
 
-                    distance = calculate_distance(
-                        sat1["position"],
-                        sat2["position"]
-                    )
+                sat1 = satellite_lookup[id1]
+                sat2 = satellite_lookup[id2]
+
+                distance = calculate_distance(
+                    sat1["position"],
+                    sat2["position"]
+                )
+
+                if distance <= eps_km:
 
                     pair = tuple(sorted(
-                           [sat1, sat2],
-                           key=lambda x: x["id"]
-                    )) 
+                        [sat1, sat2],
+                        key=lambda x: x["id"]
+                    ))
+
                     pair_key = (
-                               pair[0]["id"],
-                               pair[1]["id"]
-                    )                       
+                        pair[0]["id"],
+                        pair[1]["id"]
+                    )
 
-                    # 4. First occurrence
                     if pair_key not in closest_pairs:
-
-                        closest_pairs[pair_key] = {
-                                    "satellite_1_id": pair[0]["id"],
-                                    "satellite_2_id": pair[1]["id"],
-                                    "satellite_1_norad_id": pair[0]["norad_id"],
-                                    "satellite_2_norad_id": pair[1]["norad_id"],
-                                    "time": timestamp,
-                                    "distance_km": distance
-                                }
-                    # 5. Replace if this timestamp is closer
-                    elif distance < closest_pairs[pair_key]["distance_km"]:
 
                         closest_pairs[pair_key] = {
                             "satellite_1_id": pair[0]["id"],
@@ -116,6 +161,16 @@ def screen_satellites(
                             "distance_km": distance
                         }
 
+                    elif distance < closest_pairs[pair_key]["distance_km"]:
+
+                        closest_pairs[pair_key] = {
+                            "satellite_1_id": pair[0]["id"],
+                            "satellite_2_id": pair[1]["id"],
+                            "satellite_1_norad_id": pair[0]["norad_id"],
+                            "satellite_2_norad_id": pair[1]["norad_id"],
+                            "time": timestamp,
+                            "distance_km": distance
+                        }
         timestamp += timedelta(minutes=SCREENING_INTERVAL_MINUTES)
 
     return list(closest_pairs.values())
@@ -177,3 +232,74 @@ def detailed_analysis(sat1, sat2, timestamp):
         "tca": min_time,
         "minimum_distance_km": min_distance
     }
+
+
+
+#collsiion screen through grid
+
+
+
+def find_grid_candidates(satellites, eps_km):
+    """
+    Find satellite pairs that are within eps_km
+    using a hash-based 3D spatial grid.
+    """
+
+    cell_size = eps_km
+
+    grid = defaultdict(list)
+
+    # ------------------------------------------------
+    # 1. Put every satellite into a grid cell
+    # ------------------------------------------------
+
+    for satellite in satellites:
+
+        x = float(satellite["position"]["x"])
+        y = float(satellite["position"]["y"])
+        z = float(satellite["position"]["z"])   
+
+        cell = (
+            math.floor(x / cell_size),
+            math.floor(y / cell_size),
+            math.floor(z / cell_size)
+        )
+
+        grid[cell].append(satellite)
+
+    # ------------------------------------------------
+    # 2. Check this cell + neighboring cells
+    # ------------------------------------------------
+
+    candidate_pairs = set()
+
+    for cell, cell_satellites in grid.items():
+
+        cx, cy, cz = cell
+
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+
+                    neighbor_cell = (
+                        cx + dx,
+                        cy + dy,
+                        cz + dz
+                    )
+
+                    if neighbor_cell not in grid:
+                        continue
+
+                    for sat1 in cell_satellites:
+                        for sat2 in grid[neighbor_cell]:
+
+                            if sat1["id"] == sat2["id"]:
+                                continue
+
+                            pair_key = tuple(sorted(
+                                [sat1["id"], sat2["id"]]
+                            ))
+
+                            candidate_pairs.add(pair_key)
+
+    return candidate_pairs
