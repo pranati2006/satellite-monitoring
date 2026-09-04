@@ -77,7 +77,9 @@ def run_collision_analysis(
             "tle_line2": satellite.tle_line2,
             "tle_epoch": satellite.epoch.replace(
                 tzinfo=timezone.utc
-            )
+            ),
+            "mean_motion": satellite.mean_motion,
+            "eccentricity": satellite.eccentricity
         })
 
         # Store satellites included in this analysis
@@ -93,11 +95,9 @@ def run_collision_analysis(
 
     # Call existing screening service
     results = screen_satellites(
-        satellite_data,
-        analysis_start,
-        analysis_end,
-        eps_km=SCREENING_EPS_KM
-    )
+    satellite_data,
+    eps_km=SCREENING_EPS_KM
+)
 
     # Store conjunction candidates
     for result in results:
