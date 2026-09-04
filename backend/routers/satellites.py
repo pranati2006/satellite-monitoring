@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from services.satellite_service import (
+    delete_satellites_by_count,
     save_satellites,
     get_all_satellites,
     get_satellite,
@@ -157,4 +158,27 @@ def remove_satellite(
     return {
         "message": "Satellite deleted successfully",
         "satellite_id": satellite_id
+    }
+
+@router.delete("/bulk/count")
+def remove_satellites_by_count(
+    count: int,
+    db: Session = Depends(get_db)
+):
+
+    if count <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Count must be greater than 0"
+        )
+
+    deleted_ids = delete_satellites_by_count(
+        db,
+        count
+    )
+
+    return {
+        "message": "Satellites deleted successfully",
+        "deleted_satellite_ids": deleted_ids,
+        "count": len(deleted_ids)
     }

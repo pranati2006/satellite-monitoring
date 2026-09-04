@@ -215,3 +215,23 @@ def delete_multiple_satellites(
     db.commit()
 
     return [satellite.id for satellite in satellites]
+
+def delete_satellites_by_count(
+    db: Session,
+    count: int
+):
+    satellites = (
+        db.query(Satellite)
+        .order_by(Satellite.id)
+        .limit(count)
+        .all()
+    )
+
+    deleted_ids = [satellite.id for satellite in satellites]
+
+    for satellite in satellites:
+        db.delete(satellite)
+
+    db.commit()
+
+    return deleted_ids
