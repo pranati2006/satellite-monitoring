@@ -131,16 +131,6 @@ def screen_satellites(
             batch_info["altitude_end"]
         )
 
-        print(
-            f"\nScreening batch:"
-            f"\n  Satellites: {len(batch)}"
-            f"\n  Altitude: "
-            f"{altitude_start}-"
-            f"{altitude_end} km"
-            f"\n  Start: {start_time}"
-            f"\n  End: {end_time}"
-        )
-
         # ----------------------------------------------------
         # STEP 3:
         # SGP4 + Grid ONLY inside this window

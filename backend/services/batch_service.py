@@ -13,9 +13,9 @@ EARTH_RADIUS_KM = 6378.137
 
 ALTITUDE_BAND_SIZE_KM = 100
 
-TIME_BUCKET_SECONDS = 300  # 5 minutes
+TIME_BUCKET_SECONDS = 900  # 15 minutes
 
-GRID_CELL_SIZE_DEG = 5.0
+GRID_CELL_SIZE_DEG = 10.0
 
 PROPAGATION_STEP_SECONDS = 30
 
@@ -1050,20 +1050,6 @@ def prepare_experimental_batches(
             in batch["satellites"]
         ]
 
-        print(
-            f"Batch {index}: "
-            f"Altitude "
-            f"{batch['altitude_start']}-"
-            f"{batch['altitude_end']} km, "
-            f"Satellites: "
-            f"{len(batch['satellites'])}, "
-            f"Time: "
-            f"{batch['start_time']} -> "
-            f"{batch['end_time']}, "
-            f"NORAD IDs: "
-            f"{norad_ids}"
-        )
-
     print(
         f"Done! Generated "
         f"{len(batches)} batches."
@@ -1078,47 +1064,36 @@ def prepare_experimental_batches(
 
 def prepare_time_filtered_batches(
     satellites,
-    prediction_days=7
+    prediction_days=7,
+    start_time=None,
+    end_time=None
 ):
 
     if not satellites:
-
         return []
 
-    start_time = min(
-        satellite["tle_epoch"]
-        for satellite in satellites
-    )
+    if start_time is None:
 
-    end_time = (
-        start_time +
-        timedelta(
-            days=prediction_days
+        start_time = min(
+            satellite["tle_epoch"]
+            for satellite in satellites
         )
-    )
 
-    # Run experimental batching.
-    prepare_experimental_batches(
+    if end_time is None:
+
+        end_time = (
+            start_time +
+            timedelta(days=prediction_days)
+        )
+
+    if end_time <= start_time:
+        return []
+
+    batches = prepare_experimental_batches(
         satellites=satellites,
         prediction_days=prediction_days,
         start_time=start_time,
         end_time=end_time
     )
 
-    # IMPORTANT:
-    # collision_service still expects the
-    # original batch structure.
-
-    return [
-        {
-            "satellites": satellites,
-
-            "altitude_start": None,
-
-            "altitude_end": None,
-
-            "start_time": start_time,
-
-            "end_time": end_time
-        }
-    ]
+    return batches
