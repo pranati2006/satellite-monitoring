@@ -12,10 +12,12 @@ from services.sgp4_service import calculate_position
 EARTH_RADIUS_KM = 6378.137
 
 ALTITUDE_BAND_SIZE_KM = 100
+ALTITUDE_STEP_KM = 75
 
-TIME_BUCKET_SECONDS = 900  # 15 minutes
+TIME_BUCKET_SECONDS = 900
 
-GRID_CELL_SIZE_DEG = 10.0
+GRID_CELL_SIZE_DEG = 15.0
+GRID_STEP_DEG = 12.0
 
 PROPAGATION_STEP_SECONDS = 30
 
@@ -23,6 +25,44 @@ PROPAGATION_STEP_SECONDS = 30
 # =========================================================
 # 1. PHYSICS / COORDINATE HELPERS
 # =========================================================
+def get_sliding_altitude_windows(
+    altitude_start,
+    altitude_end
+):
+    windows = []
+
+    first_start = (
+        floor(
+            altitude_start /
+            ALTITUDE_STEP_KM
+        ) *
+        ALTITUDE_STEP_KM
+        - ALTITUDE_STEP_KM
+    )
+
+    current = first_start
+
+    while current <= altitude_end:
+
+        window_end = (
+            current +
+            ALTITUDE_BAND_SIZE_KM
+        )
+
+        if (
+            window_end >= altitude_start
+            and current <= altitude_end
+        ):
+            windows.append(
+                (
+                    current,
+                    window_end
+                )
+            )
+
+        current += ALTITUDE_STEP_KM
+
+    return windows
 
 def calculate_altitude(position):
 
@@ -259,12 +299,10 @@ def extract_one_orbit_altitude_intervals(
                 )
             )
 
-            lat_cell, lon_cell = (
-                get_lat_lon_cell(
-                    lat_lon["latitude"],
-                    lat_lon["longitude"]
-                )
-            )
+            point_cells = get_sliding_spatial_cells(
+            lat_lon["latitude"],
+            lat_lon["longitude"]
+)
 
             # -----------------------------------------
             # First point
@@ -280,11 +318,8 @@ def extract_one_orbit_altitude_intervals(
 
                 spatial_cells = set()
 
-                spatial_cells.add(
-                    (
-                        lat_cell,
-                        lon_cell
-                    )
+                spatial_cells.update(
+                    point_cells
                 )
 
             # -----------------------------------------
@@ -293,11 +328,8 @@ def extract_one_orbit_altitude_intervals(
 
             elif band == current_band:
 
-                spatial_cells.add(
-                    (
-                        lat_cell,
-                        lon_cell
-                    )
+                spatial_cells.update(
+                    point_cells
                 )
 
             # -----------------------------------------
@@ -346,11 +378,8 @@ def extract_one_orbit_altitude_intervals(
 
                 spatial_cells = set()
 
-                spatial_cells.add(
-                    (
-                        lat_cell,
-                        lon_cell
-                    )
+                spatial_cells.update(
+                    point_cells
                 )
 
         current_time += timedelta(
@@ -548,6 +577,72 @@ def build_altitude_time_hash(intervals):
 # =========================================================
 # 6. ALTITUDE + TIME + SPATIAL HASH
 # =========================================================
+def get_sliding_spatial_cells(
+    latitude,
+    longitude
+):
+
+    cells = []
+
+    # Find possible latitude window starts
+    lat_start = (
+        floor(
+            latitude /
+            GRID_STEP_DEG
+        ) *
+        GRID_STEP_DEG
+        - GRID_STEP_DEG
+    )
+
+    # Only a few windows can contain this point
+    for _ in range(3):
+
+        lat_end = (
+            lat_start +
+            GRID_CELL_SIZE_DEG
+        )
+
+        if (
+            latitude >= lat_start
+            and latitude <= lat_end
+            and lat_start >= -90.0
+            and lat_start <= 90.0
+        ):
+
+            # Find possible longitude window starts
+            lon_start = (
+                floor(
+                    longitude /
+                    GRID_STEP_DEG
+                ) *
+                GRID_STEP_DEG
+                - GRID_STEP_DEG
+            )
+
+            for _ in range(3):
+
+                lon_end = (
+                    lon_start +
+                    GRID_CELL_SIZE_DEG
+                )
+
+                if (
+                    longitude >= lon_start
+                    and longitude <= lon_end
+                ):
+
+                    cells.append(
+                        (
+                            lat_start,
+                            lon_start
+                        )
+                    )
+
+                lon_start += GRID_STEP_DEG
+
+        lat_start += GRID_STEP_DEG
+
+    return cells
 
 def build_altitude_time_spatial_hash(
     intervals
@@ -593,10 +688,6 @@ def build_altitude_time_spatial_hash(
 
     return spatial_hash
 
-
-# =========================================================
-# 7. FINAL BATCHING
-# =========================================================
 
 # =========================================================
 # 7. FINAL BATCHING

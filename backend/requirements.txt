@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+SQLAlchemy
+PyMySQL
+python-dotenv
+requests
+sgp4
+numpy
+scikit-learn
